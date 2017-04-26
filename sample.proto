@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+// protoc --python_out=src -Isrc src/tests/sample.proto
+package tests;
+
+message MessageOfTypes {
+        double dubl = 1;
+        float flot = 2;
+        int32 i32 = 3;
+        int64 i64 = 4;
+        uint32 ui32 = 5;
+        uint64 ui64 = 6;
+        sint32 si32 = 7;
+        sint64 si64 = 8;
+        fixed32 f32 = 9;
+        fixed64 f64 = 17; // oops, OOO 
+        sfixed32 sf32 = 10; 
+        sfixed64 sf64 = 11; 
+        bool bol = 12; 
+        string strng = 13; 
+        bytes byts = 14; 
+        NestedType nested = 15; 
+        Enum enm = 16; 
+        repeated int32 range = 18; 
+        repeated NestedType nestedRepeated = 19; 
+        repeated Enum enmRepeated = 20; 
+
+        message NestedType {
+                string req = 1;
+        }   
+
+        enum Enum {
+                A = 0;
+                B = 1;
+                C = 2;
+        }   
+}
+
