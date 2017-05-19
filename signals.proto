@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+// Define the telemetry received from the injected Javascript
+message Telemetry {
+  string customerId = 1;
+  string sessionToken = 2;
+  string browserCookie = 3;
+  string url = 4;
+  BrowserSignals browserSignals = 5;
+  UserActivities userActivities = 6;
+  HttpRequestInfo httpReqInfo = 7;
+}
+
+message HttpRequestInfo {
+  uint64 timestamp = 1;
+  string url = 2;
+  string ip = 3;
+  string ua = 4;
+  string referer = 5;
+  repeated string httpHeader = 6; //the sequence matters
+  string httpMethod = 7;
+  string httpVersion = 8;
+  //TODO: add enum ssl method and protocol
+}
