@@ -1,25 +1,36 @@
 import sys 
 import os
-import argparser
+import argparse
 import json
 import base64
 import random
+import socket
 from copy import copy
 import signals_pb2
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from google.protobuf.descriptor import FieldDescriptor
 from protobuf_to_dict import protobuf_to_dict, TYPE_CALLABLE_MAP
-from common.logger import logger as LOGGER
+import log
 from elasticsearch import Elasticsearch
 import urllib2
+import string
+import time
+import datetime
+from time import gmtime,strftime
+import yaml
+
 
 #-- defaul log file name
 ENRICHED_LOGFILE = "enriched.log"
+LOGGER = log.get_logger()
 
 #-- convert pb preparing stuff
 type_callable_map = copy(TYPE_CALLABLE_MAP)
 type_callable_map[FieldDescriptor.TYPE_BYTES] = str 
+
+def randomword(l):
+    return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(l))
 
 def show_pb(pb):
     # my_message is a google.protobuf.message.Message instance
@@ -35,71 +46,27 @@ ES_INDEX_PREFIX = 'enriched-osprey-test'
 TYPE_NAME = 'event'
 ID_FIELD = 'sessionToken'
 
+
 class es_piper:
+    """
+        wrapper the processing to pipe data to ES
+    """
     def __init__(self):
         self.es_client = None
         try:
-            es_client = elasticsearch.Elasticsearch(
+            self.es_client = elasticsearch.Elasticsearch(
                 hosts=[ES_HOST], 
                 timeout=120, 
                 max_retries=5, 
                 retry_on_timeout=True)
         except Exception as e:
-            logger.error("cannot connect to ES", {"err":e})
+            LOGGER.error("cannot connect to ES", {"err":e})
         if self.es_client == None:
             return
         self.bulk_data = {}
 
-    def pipe_msg(msg):
-
-        date = msg["@timestamp"]
-        suffix = "%s-%s%s" % (h.hexdigest(), suffix, datetime.datetime.now().strftime("%Y%m%d"))
-        es_index = "cpq-%s-%s-%s" % ("TEST" if label == None else label, retention, suffix)
-        es_index_type = "%s/%s" % (es_index, estype)
-        es_client = elasticsearch.Elasticsearch(hosts=[{"host": esnode, "port": 9200}], timeout=120, max_retries=5, retry_on_timeout=True)
-
-
-        if es.indices.exists(INDEX_NAME):
-            print("deleting '%s' index..." % (INDEX_NAME))
-            res = es.indices.delete(index = INDEX_NAME)
-            print(" response: '%s'" % (res))
-
-        bulk_data = []
-        send2Es = False
-        toSend = 0
-        for l in f:
-            if send2Es:
-                # bulk index the data
-                print("bulk indexing...")
-                res = es.bulk(index = INDEX_NAME, body = bulk_data, refresh = True)
-                print(" response: '%s'" % (res))
-                toSend = 0
-                send2Es = False
-                bulk_data = []
-            l = l.strip()
-            j = json.loads(l)
-            dmsg = j
-            #d = j['d']
-            #dmsg = get_dict_of_message(d)
-            op_dict = {
-                "index": {
-                    "_index": INDEX_NAME, 
-                "_type": TYPE_NAME, 
-                "_id": dmsg[ID_FIELD]
-                }
-            }
-            bulk_data.append(op_dict)
-            bulk_data.append(dmsg)
-            toSend += 1
-            if toSend == 50:
-                send2Es = True
-        if len(bulk_data) > 0:
-            print("bulk indexing...")
-            res = es.bulk(index = INDEX_NAME, body = bulk_data, refresh = True)
-            print(" response: '%s'" % (res))
-
     def create_index(es_client, es_index_type, schema):
-       if es_client.indices.exists(index=es_index):
+        if self.es_client.indices.exists(index=es_index):
             logger.warn("index %s already exists remove" % es_index)
             es_client.indices.delete(index=es_index, ignore=[400, 404])
         try:
@@ -125,11 +92,71 @@ class es_piper:
             return None
 
 
+    def pipe_msg(msg):
+        date = msg["@timestamp"]
+        suffix = "%s-%s%s" % (h.hexdigest(), suffix, datetime.datetime.now().strftime("%Y%m%d"))
+        es_index = "%s-%s" % (prefix, suffix)
+        es_index_type = "%s/%s" % (es_index, estype)
+        es_client = elasticsearch.Elasticsearch(hosts=[{"host": esnode, "port": 9200}], timeout=120, max_retries=5, retry_on_timeout=True)
+
+
+        if es.indices.exists(INDEX_NAME):
+            print("deleting '%s' index..." % (INDEX_NAME))
+            res = es.indices.delete(index = INDEX_NAME)
+            print(" response: '%s'" % (res))
+
+        bulk_data = []
+        send2Es = False
+        toSend = 0
+        for l in f:
+            if send2Es:
+                # bulk index the data
+                print("bulk indexing...")
+                res = es.bulk(index = INDEX_NAME, body = bulk_data, refresh = True)
+                print(" response: '%s'" % (res))
+                toSend = 0
+                send2Es = False
+                bulk_data = []
+            l = l.strip()
+            j = json.loads(l)
+            dmsg = j
+            p_dict = {
+                "index": {
+                    "_index": INDEX_NAME, 
+                "_type": TYPE_NAME, 
+                "_id": dmsg[ID_FIELD]
+                }
+            }
+            bulk_data.append(op_dict)
+            bulk_data.append(dmsg)
+            toSend += 1
+            if toSend == 50:
+                send2Es = True
+        if len(bulk_data) > 0:
+            print("bulk indexing...")
+            res = es.bulk(index = INDEX_NAME, body = bulk_data, refresh = True)
+            print(" response: '%s'" % (res))
+
+
+class kreader:
+    """ 
+        initialze and prepare the reader
+        get the infinite loop iterator to get the message
+    """
+    def __init__(self, topic, group, brokers):
+        self.consumer = KafkaConsumer(topic, group_id=group, bootstrap_servers=brokers)
+
+    def msg_iterator(self):
+        return self.consumer
+
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Merger Consumer")
     parser.add_argument("-e", "--elastic", type=str, help="Specify the Elasticsearch Server", required=True)
-    parser.add_argument("-f", "--conf", type=file, help="Specify the config file of Merger Consumer", required=True)
+    parser.add_argument("-l", "--label", type=str, help="Specify the label", required=True)
+    parser.add_argument("-f", "--conf", type=file, help="Specify the config file", required=True)
+    parser.add_argument("-z", "--zookeeper", type=str, help="Specify the zookeeper", default="localhost:2181")
+    parser.add_argument("-c", "--customer", type=str, help="Specify the customer", default="osprey-test")
     parser.add_argument("-v", "--verbosity", action="count", default=0)
     return parser
 
@@ -146,7 +173,6 @@ def main():
     label = args.label
     # fetch the config
     config = yaml.load(args.conf)
-    config = pusher_config.build_config_map(config)
 
     # claim to have the authority to run the job
     if args.zookeeper != None:
@@ -158,19 +184,17 @@ def main():
         exit(1)
 
     # make a logger
-    log_file = "%s/%s/%s/%s-%s" % (config['logging']['directory'], args.customer, label, owner, ENRICHED_LOGFILE)
+    #log_file = "%s/%s/%s/%s-%s" % (config['logging']['directory'], args.customer, label, owner, ENRICHED_LOGFILE)
+    log_file = "/home/osprey/workspace/osprey/apiserver/%s" % ENRICHED_LOGFILE
     if not os.path.exists(os.path.dirname(log_file)):
         os.makedirs(os.path.dirname(log_file))
-    log_level = args.verbosity
-    LOGGER.set_file_logger(__name__, log_level, log_file)
 
-    es_piper = es_piper()
+    #log_level = args.verbosity
+    #LOGGER.set_file_logger(__name__, log_level, log_file)
 
-    r = kreader('mergedEnrichRequest', 'piper', ['localhost:9092'], meta.get_partition_offsets())
-    if es_client == None:
-        print "Cannot connect to ElasticSearch"
-        exit(0)
+    espiper = es_piper()
 
+    r = kreader('mergedEnrichRequest', 'piper', ['localhost:9092'])
     for message in r.msg_iterator():
         # message value and key are raw bytes -- decode if necessary!
         # e.g., for unicode: `message.value.decode('utf-8')`
@@ -188,8 +212,7 @@ def main():
 
         # after get the merged message, simply pipe into the ES in bulk mode
         dmsg = protobuf_to_dict(pb_msg, type_callable_map=type_callable_map)
-        es_piper.pipe_msg(dmsg)
+        espiper.pipe_msg(dmsg)
 
 if __name__ == '__main__':
     main()
-
